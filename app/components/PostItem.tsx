@@ -1,0 +1,1088 @@
+"use client";
+
+import { useState, useEffect, useRef, useCallback, memo, useMemo } from "react";
+import { Post, Comment } from "../types";
+import { auth } from "../firebase";
+import { motion, AnimatePresence } from "framer-motion";
+import Link from "next/link";
+import Image from "next/image";
+import { useAuth } from "@/context/AuthContext";
+import { useSystem } from "@/context/SystemContext";
+import {
+  ThumbsUp,
+  ThumbsDown,
+  MessageSquare,
+  Share2,
+  Eye,
+  MoreVertical,
+  Flag,
+  Trash2,
+  ImageIcon,
+  Bookmark,
+  CornerDownRight,
+  Edit2,
+  Archive,
+  RefreshCcw,
+  Check,
+  X,
+  BarChart2,
+  ShieldOff,
+  VolumeX,
+  AlertTriangle,
+  Sparkles,
+  Loader2,
+  Trophy,
+  Map,
+  ShieldAlert
+} from "lucide-react";
+import api, { getAbsUrl } from "../lib/api";
+import { formatDistanceToNow } from "date-fns";
+import { toast } from "sonner";
+import ReportModal from "./ReportModal";
+import ShareImageTemplate from "./ShareImageTemplate";
+import { toPng } from "html-to-image";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import PollBlock from "./PollBlock";
+import PostReactions from "./PostReactions";
+
+/* ---------------- HELPER COMPONENTS ---------------- */
+
+const CommentItem = ({
+  comment,
+  currentUser,
+  onReply,
+  depth = 0,
+  canComment
+}: {
+  comment: Comment,
+  currentUser: any | null,
+  onReply: (parentId: string, content: string) => void,
+  depth?: number,
+  canComment: boolean
+}) => {
+  const [isReplying, setIsReplying] = useState(false);
+  const [replyText, setReplyText] = useState("");
+
+  const handleSubmit = () => {
+    if (!replyText.trim() || !canComment) return;
+    onReply(comment.id, replyText);
+    setIsReplying(false);
+    setReplyText("");
+  };
+
+  return (
+    <div className={`mt-4 ${depth > 0 ? "relative" : ""}`}>
+      {depth > 0 && (
+        <div className="absolute -left-5 top-0 w-4 h-8 border-b border-l border-white/10 rounded-bl-xl" />
+      )}
+
+      <div className="flex gap-3 relative group">
+        <img
+          src={getAbsUrl(comment.user_pic) || '/assets/default_avatar.png'}
+          width={24}
+          height={24}
+          className="rounded-full ring-2 ring-primary/20 object-cover shadow-sm"
+          onError={(e) => { if (!e.currentTarget.src.includes('default_avatar')) e.currentTarget.src = '/assets/default_avatar.png'; }}
+          alt={comment.user_name}
+        />
+        <div className="flex-1">
+          <div className="bg-white/5 backdrop-blur-md border border-white/5 rounded-2xl rounded-tl-none px-3 py-2 inline-block max-w-full shadow-sm">
+            <span className="font-bold text-xs text-foreground mr-2 block mb-0.5">{comment.user_name}</span>
+            <span className="text-xs text-foreground/80 leading-relaxed block whitespace-pre-wrap break-words">{comment.content}</span>
+          </div>
+
+          <div className="flex items-center gap-4 mt-1 ml-1">
+            <span className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">
+              {comment.created_at ? formatDistanceToNow(new Date(comment.created_at), { addSuffix: true }) : 'Just now'}
+            </span>
+            {currentUser && (
+              <button
+                onClick={() => setIsReplying(!isReplying)}
+                className="text-[10px] text-primary hover:text-primary/80 font-bold uppercase tracking-wider transition-colors"
+              >
+                Reply
+              </button>
+            )}
+            {comment.id.startsWith('temp-') && <span className="text-[10px] text-muted-foreground italic">(Posting...)</span>}
+          </div>
+        </div>
+      </div>
+
+      {isReplying && (
+        <div className="mt-3 ml-9 flex gap-2 animate-in fade-in slide-in-from-top-1">
+          <CornerDownRight size={14} className="text-white/20 mt-2.5" />
+          <input
+            autoFocus
+            value={replyText}
+            onChange={(e) => setReplyText(e.target.value)}
+            placeholder={`Reply to ${comment.user_name}...`}
+            className="flex-1 bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-primary/50 transition-all"
+            onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
+          />
+        </div>
+      )}
+
+      {comment.replies && comment.replies.length > 0 && (
+        <div className="ml-9 border-l border-dashed border-white/10 pl-5">
+          {comment.replies.map(reply => (
+            <CommentItem key={reply.id} comment={reply} currentUser={currentUser} onReply={onReply} depth={depth + 1} canComment={canComment} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+function buildCommentTree(comments: Comment[]): Comment[] {
+  const map: { [key: string]: Comment } = {};
+  const roots: Comment[] = [];
+
+  // Deep copy to avoid mutating original state directly if objects are shared
+  // and initialize replies
+  comments.forEach(c => {
+    map[c.id] = { ...c, replies: [] };
+  });
+
+  comments.forEach(c => {
+    // If we have a parent_id AND that parent exists in our current set
+    if (c.parent_id && map[c.parent_id]) {
+      map[c.parent_id].replies!.push(map[c.id]);
+    } else {
+      // Top level (or parent not found/loaded)
+      roots.push(map[c.id]);
+    }
+  });
+
+  return roots;
+}
+
+function PostItem({ post, highlightQuery }: { post: Post; highlightQuery?: string }) {
+  /* ---------------- STATE ---------------- */
+  const { user: currentUser } = useAuth();
+  const { readOnlyMode, requireVerifiedEmail } = useSystem();
+
+  // Stats
+  // Real view count from DB + local increment
+  const [viewCount, setViewCount] = useState(post.view_count || 0);
+
+  const [reactionCount, setReactionCount] = useState(post.reaction_count || 0);
+  const [downvoteCount, setDownvoteCount] = useState(post.downvote_count || 0);
+
+  const [currentReaction, setCurrentReaction] = useState<string | undefined>(post.user_reaction);
+  const [hasDownvoted, setHasDownvoted] = useState(post.has_downvoted || false);
+  const [isReacting, setIsReacting] = useState(false); // Loading state for react
+  const [isDownvoting, setIsDownvoting] = useState(false); // Loading state for downvote
+
+  const [showComments, setShowComments] = useState(false);
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [commentText, setCommentText] = useState("");
+
+  const commentTree = useMemo(() => buildCommentTree(comments), [comments]);
+  const [isBookmarked, setIsBookmarked] = useState(false);
+  const [isHelped, setIsHelped] = useState(post.has_helped || false);
+  const [helpedCount, setHelpedCount] = useState(post.helped_count || 0);
+  const [showHelpedInput, setShowHelpedInput] = useState(false);
+  const [helpedText, setHelpedText] = useState("");
+  const [isSubmittingHelped, setIsSubmittingHelped] = useState(false);
+
+  const [reportModalConfig, setReportModalConfig] = useState<{
+    isOpen: boolean;
+    targetId: string;
+    targetType: "post" | "user";
+  }>({
+    isOpen: false,
+    targetId: "",
+    targetType: "post"
+  });
+  const [showMenu, setShowMenu] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState(post.title || "");
+  const [editContent, setEditContent] = useState(post.content);
+  const [localIsArchived, setLocalIsArchived] = useState(post.is_archived || false);
+  const [isUpdating, setIsUpdating] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // New feature states
+  const [showInsights, setShowInsights] = useState(false);
+  const [insights, setInsights] = useState<any>(null);
+  const [insightsLoading, setInsightsLoading] = useState(false);
+  const [cwRevealed, setCwRevealed] = useState(false); // content warning toggle
+  const [summary, setSummary] = useState<string | null>(null);
+  const [summarizing, setSummarizing] = useState(false);
+  const [showSummary, setShowSummary] = useState(false);
+
+  // Close menu on click outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setShowMenu(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const viewRecorded = useRef(false);
+
+  /* ---------------- AUTH & VIEW ---------------- */
+  useEffect(() => {
+    // Record view only once per session/mount and preferably if user is loaded (or guest)
+    if (!viewRecorded.current) {
+      viewRecorded.current = true;
+      // Fire and forget
+      api.post(`/posts/${post.id}/view`, { user_id: currentUser ? currentUser.uid : "guest" })
+        .catch(err => console.error("View count error", err));
+      setViewCount(v => v + 1); // Optimistic increment
+    }
+  }, [post.id, currentUser?.uid]);
+
+
+  /* ---------------- HANDLERS ---------------- */
+  const handleReact = useCallback(async (type: string) => {
+    if (!currentUser) {
+      toast.error("Please login to react");
+      return;
+    }
+
+    if (isReacting) return;
+
+    // Optimistic
+    const previousReaction = currentReaction;
+    const previousCount = reactionCount;
+    const wasDownvoted = hasDownvoted;
+
+    setIsReacting(true);
+
+    if (type === "remove") {
+      setCurrentReaction(undefined);
+      setReactionCount(c => Math.max(0, c - 1));
+    } else {
+      setCurrentReaction(type);
+      if (!previousReaction) setReactionCount(c => c + 1);
+
+      if (wasDownvoted) {
+        setHasDownvoted(false);
+        setDownvoteCount(c => Math.max(0, c - 1));
+      }
+    }
+
+    try {
+      if (type === "remove") {
+        // API expects removing reaction (maybe via downvote/unlike logic, we'll re-use react endpoint with "remove")
+        await api.post(`/posts/${post.id}/reactions`, { user_id: currentUser.uid, type: "remove" });
+      } else {
+        await api.post(`/posts/${post.id}/reactions`, { user_id: currentUser.uid, type });
+      }
+    } catch (e) {
+      // Rollback
+      console.error("Reaction error:", e);
+      setCurrentReaction(previousReaction);
+      setReactionCount(previousCount);
+      if (wasDownvoted) {
+        setHasDownvoted(true);
+        setDownvoteCount(c => c + 1);
+      }
+      toast.error("Failed to update reaction.");
+    } finally {
+      setIsReacting(false);
+    }
+  }, [currentUser, currentReaction, reactionCount, hasDownvoted, isReacting, post.id]);
+
+  const handleDownvote = useCallback(async () => {
+    if (!currentUser) {
+      toast.error("Please login to vote");
+      return;
+    }
+    if (isDownvoting) return;
+
+    const wasDownvoted = hasDownvoted;
+    const previousReaction = currentReaction;
+
+    // Toggle Downvote
+    setHasDownvoted(!wasDownvoted);
+    setDownvoteCount(c => wasDownvoted ? c - 1 : c + 1);
+
+    // If was upvoted, remove upvote
+    if (previousReaction) {
+      setCurrentReaction(undefined);
+      setReactionCount(c => c - 1);
+    }
+
+    setIsDownvoting(true);
+
+    try {
+      await api.post(`/posts/${post.id}/downvote`, { user_id: currentUser.uid });
+    } catch (e) {
+      console.error("Downvote error", e);
+      // Rollback
+      setHasDownvoted(wasDownvoted);
+      if (previousReaction) {
+        setCurrentReaction(previousReaction);
+        setReactionCount(c => c + 1);
+      }
+      setDownvoteCount(c => wasDownvoted ? c + 1 : c - 1);
+      toast.error("Failed to downvote");
+    } finally {
+      setIsDownvoting(false);
+    }
+  }, [currentUser, currentReaction, hasDownvoted, isDownvoting, post.id]);
+
+  const handleComment = useCallback(async (parentId: string | null = null, content: string = commentText) => {
+    if (!content.trim() || !currentUser) return;
+
+    const tempId = `temp-${Date.now()}`;
+    const newCommentObj: Comment = {
+      id: tempId,
+      user_id: currentUser.uid,
+      user_name: currentUser.displayName || "User",
+      user_pic: currentUser.photoURL || "",
+      content: content,
+      created_at: new Date().toISOString(),
+      parent_id: parentId || undefined
+    };
+
+    // Optimistic update
+    setComments(prev => [...prev, newCommentObj]);
+    if (!parentId) setCommentText(""); // Clear main input if top-level
+
+    try {
+      await api.post(`/posts/${post.id}/comments`, {
+        user_id: currentUser.uid,
+        user_name: currentUser.displayName,
+        user_pic: currentUser.photoURL,
+        content: newCommentObj.content,
+        parent_id: parentId
+      });
+
+      // No need to replace tempId as we refetch or just let it be until refresh
+    } catch (error) {
+      console.error("Error posting comment:", error);
+      // Rollback
+      setComments(prev => prev.filter(c => c.id !== tempId));
+      toast.error("Failed to post comment. Please try again.");
+    }
+  }, [commentText, currentUser, post.id, readOnlyMode, requireVerifiedEmail]);
+
+  const handleShare = useCallback(async () => {
+    const url = `${window.location.origin}/post/${post.id}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.success("Link copied!");
+    } catch (err) {
+      toast.error("Failed to copy link");
+    }
+  }, [post.id]);
+
+  const handleBookmark = useCallback(async () => {
+    if (!currentUser) {
+      toast.error("Please login to bookmark");
+      return;
+    }
+
+    // Optimistic Update
+    setIsBookmarked((prev) => !prev);
+    const newStatus = !isBookmarked;
+
+    try {
+      await api.post(`/posts/${post.id}/bookmark`, { user_id: currentUser.uid });
+      toast.success(newStatus ? "Bookmarked!" : "Bookmark removed");
+    } catch (error) {
+      console.error("Bookmark error", error);
+      setIsBookmarked(!newStatus); // Rollback
+      toast.error("Failed to bookmark");
+    }
+  }, [currentUser, post.id, isBookmarked]);
+
+  const handleUpdate = async () => {
+    if (!currentUser || isUpdating) return;
+    setIsUpdating(true);
+    try {
+      await api.patch(`/posts/${post.id}?user_id=${currentUser.uid}`, {
+        title: editTitle,
+        content: editContent
+      });
+      toast.success("Post updated!");
+      setIsEditing(false);
+      // Reload page or update parent state? For now, just show success. 
+      // Ideally we'd have a global state update.
+      window.location.reload();
+    } catch (error) {
+      toast.error("Failed to update post");
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  const handleArchive = async () => {
+    if (!currentUser) return;
+    const action = localIsArchived ? "unarchive" : "archive";
+    try {
+      await api.post(`/posts/${post.id}/${action}?user_id=${currentUser.uid}`);
+      setLocalIsArchived(!localIsArchived);
+      toast.success(localIsArchived ? "Post unarchived!" : "Post archived!");
+      setShowMenu(false);
+    } catch (error) {
+      toast.error(`Failed to ${action} post`);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!currentUser) return;
+    if (!confirm("Are you sure you want to delete this post? This action cannot be undone.")) return;
+
+    try {
+      await api.delete(`/posts/${post.id}/?user_id=${currentUser.uid}`);
+      toast.success("Post deleted");
+      window.location.reload();
+    } catch (error) {
+      toast.error("Failed to delete post");
+    }
+  };
+
+  const handleHelped = async () => {
+    if (!currentUser) {
+      toast.error("Please login to share your experience");
+      return;
+    }
+    if (isHelped) return;
+    setShowHelpedInput(true);
+  };
+
+  const submitHelpedFeedback = async () => {
+    if (!currentUser || isSubmittingHelped) return;
+    setIsSubmittingHelped(true);
+    try {
+      await api.post(`/api/v1/posts/${post.id}/helped`, {
+        user_id: currentUser.uid,
+        message: helpedText
+      });
+      setIsHelped(true);
+      setHelpedCount(prev => prev + 1);
+      setShowHelpedInput(false);
+      toast.success("Thank you for sharing your experience!");
+    } catch (error) {
+      toast.error("Failed to submit feedback");
+    } finally {
+      setIsSubmittingHelped(false);
+    }
+  };
+
+  const handleInsights = async () => {
+    if (!currentUser) return;
+    setShowInsights(true);
+    if (insights) return;
+    setInsightsLoading(true);
+    try {
+      const res = await api.get(`/posts/${post.id}/insights?user_id=${currentUser.uid}`);
+      setInsights(res.data);
+    } catch { toast.error("Failed to load insights"); }
+    finally { setInsightsLoading(false); }
+  };
+
+  const handleSummarize = async () => {
+    if (summary) {
+      setShowSummary(!showSummary);
+      return;
+    }
+    setSummarizing(true);
+    setShowSummary(true);
+    try {
+      const res = await api.get(`/api/v1/posts/${post.id}/summarize`);
+      setSummary(res.data.summary);
+    } catch {
+      toast.error("Failed to generate summary");
+      setShowSummary(false);
+    } finally {
+      setSummarizing(false);
+    }
+  };
+
+  const handleBlock = async () => {
+    if (!currentUser || !post.user_id) return;
+    try {
+      await api.post(`/users/${post.user_id}/block`, { user_id: currentUser.uid });
+      toast.success("User blocked");
+      setShowMenu(false);
+    } catch { toast.error("Failed to block"); }
+  };
+
+  const handleMute = async () => {
+    if (!currentUser || !post.user_id) return;
+    try {
+      await api.post(`/users/${post.user_id}/mute`, { user_id: currentUser.uid });
+      toast.success("User muted — their posts will be hidden");
+      setShowMenu(false);
+    } catch { toast.error("Failed to mute"); }
+  };
+
+  // Linkify #hashtags and highlight search queries in content
+  const renderContent = (text: string) => {
+    const parts = text.split(/(#\w+)/g);
+
+    return parts.map((part, i) => {
+      if (/^#\w+$/.test(part)) {
+        return <Link key={`tag-${i}`} href={`/tags/${part.slice(1)}`} className="text-primary font-semibold hover:underline">{part}</Link>;
+      }
+
+      if (highlightQuery && highlightQuery.trim().length > 0) {
+        const escapedQuery = highlightQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regex = new RegExp(`(${escapedQuery})`, 'gi');
+        const subParts = part.split(regex);
+
+        return subParts.map((sub, j) =>
+          sub.toLowerCase() === highlightQuery.toLowerCase()
+            ? <mark key={`mark-${i}-${j}`} className="bg-primary/20 text-primary font-bold rounded-sm px-1 selection:bg-primary/40 leading-none">{sub}</mark>
+            : sub
+        );
+      }
+
+      return part;
+    });
+  };
+
+
+  /* ---------------- RENDER ---------------- */
+  const formattedDate = post.created_at
+    ? formatDistanceToNow(new Date(post.created_at), { addSuffix: true })
+    : "Recently";
+
+  return (
+    <div className="glass-card p-6 md:p-8 mb-6 relative overflow-hidden group/post transition-all duration-500">
+
+      {/* 1. TOP TAGS & MENU */}
+      <div className="flex justify-between items-start mb-6">
+        <div className="flex flex-wrap gap-2">
+          {(post.hubs && post.hubs.length > 0) && post.hubs.map(hub => (
+            <Link key={hub} href={`/hubs/${hub.toLowerCase()}`} className="flex items-center gap-1.5 px-4 py-1.5 rounded-xl bg-primary/20 text-primary text-[10px] font-black uppercase tracking-widest hover:bg-primary/30 transition-all">
+              <Trophy size={10} />
+              {hub} Hub
+            </Link>
+          ))}
+        </div>
+        <div className="relative" ref={menuRef}>
+          <button
+            onClick={() => setShowMenu(!showMenu)}
+            className="p-2 text-muted-foreground/30 hover:text-foreground transition-colors hover:bg-white/5 rounded-xl"
+          >
+            <MoreVertical size={16} />
+          </button>
+
+          {showMenu && (
+            <div className="absolute right-0 mt-2 w-48 glass-premium rounded-2xl shadow-2xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-100">
+              {currentUser?.uid === post.user_id ? (
+                <>
+                  <button
+                    onClick={() => { setIsEditing(true); setShowMenu(false); }}
+                    className="w-full flex items-center gap-3 px-5 py-4 text-xs font-bold text-foreground hover:bg-white/5 transition-colors"
+                  >
+                    <Edit2 size={14} className="text-primary" />
+                    Edit Post
+                  </button>
+                  <button
+                    onClick={handleArchive}
+                    className="w-full flex items-center gap-3 px-5 py-4 text-xs font-bold text-foreground hover:bg-white/5 transition-colors"
+                  >
+                    {localIsArchived ? <RefreshCcw size={14} className="text-emerald-500" /> : <Archive size={14} className="text-amber-500" />}
+                    {localIsArchived ? "Unarchive Post" : "Archive Post"}
+                  </button>
+                  <div className="border-t border-border/30" />
+                  <button
+                    onClick={handleDelete}
+                    className="w-full flex items-center gap-3 px-5 py-4 text-xs font-bold text-destructive hover:bg-destructive/10 transition-colors"
+                  >
+                    <Trash2 size={14} />
+                    Delete Post
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={() => { setReportModalConfig({ isOpen: true, targetId: post.id, targetType: "post" }); setShowMenu(false); }}
+                    className="w-full flex items-center gap-3 px-5 py-4 text-xs font-bold text-foreground hover:bg-white/5 transition-colors"
+                  >
+                    <Flag size={14} className="text-destructive" />
+                    Report Post
+                  </button>
+                  <button
+                    onClick={handleMute}
+                    className="w-full flex items-center gap-3 px-5 py-4 text-xs font-bold text-foreground hover:bg-white/5 transition-colors"
+                  >
+                    <VolumeX size={14} className="text-amber-500" />
+                    Mute User
+                  </button>
+                  <button
+                    onClick={handleBlock}
+                    className="w-full flex items-center gap-3 px-5 py-4 text-xs font-bold text-destructive hover:bg-destructive/10 transition-colors"
+                  >
+                    <ShieldOff size={14} />
+                    Block User
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* 2. HEADER: AUTHOR */}
+      <div className="flex gap-4 mb-6">
+        {post.is_anonymous ? (
+          <div className="flex gap-4">
+            <div className="w-12 h-12 rounded-[1.25rem] overflow-hidden ring-4 ring-background shadow-lg relative">
+              <Image
+                src={getAbsUrl("/assets/anonymous.png")}
+                fill
+                className="object-cover"
+                alt="Anonymous Author"
+                sizes="(max-width: 768px) 48px, 48px"
+              />
+            </div>
+            <div>
+              <h4 className="text-sm font-black text-foreground flex items-center gap-2">
+                Anonymous
+              </h4>
+              <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-widest flex items-center gap-2">
+                {formattedDate}
+                <span className="w-1 h-1 rounded-full bg-muted-foreground/30"></span>
+                <span className="text-primary/70">{Math.ceil(post.content.split(/\s+/).length / 200)} min read</span>
+                {post.is_professional_inquiry && (
+                  <>
+                    <span className="w-1 h-1 rounded-full bg-muted-foreground/30"></span>
+                    <span className="text-emerald-500 flex items-center gap-1 font-black">
+                      <Map size={10} /> Professional Inquiry
+                    </span>
+                  </>
+                )}
+              </p>
+            </div>
+          </div>
+        ) : (
+          <Link href={`/u/${(post.username && post.username !== "@user" && post.username !== "@anonymous") ? post.username.replace('@', '') : post.user_id}`} className="flex gap-4 group/author">
+            <div className="w-12 h-12 rounded-[1.25rem] overflow-hidden ring-4 ring-background shadow-lg transition-transform group-hover/author:scale-105 relative">
+              <img
+                src={getAbsUrl(post.user_pic || post.author_pic) || '/assets/default_avatar.png'}
+                className="object-cover w-12 h-12"
+                onError={(e) => { if (!e.currentTarget.src.includes('default_avatar')) e.currentTarget.src = '/assets/default_avatar.png'; }}
+                alt={post.user_name || "Author"}
+              />
+            </div>
+            <div>
+              <h4 className="text-sm font-black text-foreground flex items-center gap-2 group-hover/author:text-primary transition-colors">
+                {post.user_name || "User"}
+                <span className="text-[10px] text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded-full font-black ring-1 ring-emerald-500/20">850</span>
+                {post.collaborators && post.collaborators.length > 0 && (
+                  <span className="flex items-center gap-1 ml-2 text-xs font-normal text-muted-foreground">
+                    with
+                    {post.collaborators.map((c, i) => (
+                      <span key={i} className="text-primary font-bold hover:underline cursor-pointer">@{c}</span>
+                    ))}
+                  </span>
+                )}
+              </h4>
+              <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-widest flex items-center gap-2">
+                {formattedDate}
+                <span className="w-1 h-1 rounded-full bg-muted-foreground/30"></span>
+                <span className="text-primary/70">{Math.ceil(post.content.split(/\s+/).length / 200)} min read</span>
+                {post.is_professional_inquiry && (
+                  <>
+                    <span className="w-1 h-1 rounded-full bg-muted-foreground/30"></span>
+                    <span className="text-emerald-500 flex items-center gap-1 font-black">
+                      <Map size={10} /> Professional Inquiry
+                    </span>
+                  </>
+                )}
+              </p>
+            </div>
+          </Link>
+        )}
+      </div>
+
+      {/* 3. CONTENT */}
+      {isEditing ? (
+        <div className="mb-6 space-y-4 animate-in fade-in slide-in-from-top-2">
+          <input
+            value={editTitle}
+            onChange={(e) => setEditTitle(e.target.value)}
+            placeholder="Title (optional)"
+            className="w-full bg-white/5 dark:bg-card/50 border border-border/50 rounded-2xl px-5 py-3 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/50 transition-all font-medium"
+          />
+          <textarea
+            value={editContent}
+            onChange={(e) => setEditContent(e.target.value)}
+            rows={5}
+            className="w-full bg-white/5 dark:bg-card/50 border border-border/50 rounded-2xl px-5 py-3 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/50 transition-all font-medium resize-none"
+          />
+          <div className="flex gap-3">
+            <button
+              onClick={handleUpdate}
+              disabled={isUpdating || !editContent.trim()}
+              className="flex items-center gap-2 px-6 py-2.5 bg-primary text-white rounded-xl text-xs font-bold hover:brightness-110 disabled:opacity-50 transition-all active:scale-95 shadow-lg shadow-primary/20"
+            >
+              <Check size={14} />
+              Save Changes
+            </button>
+            <button
+              onClick={() => { setIsEditing(false); setEditTitle(post.title || ""); setEditContent(post.content); }}
+              className="flex items-center gap-2 px-6 py-2.5 bg-white/5 text-foreground rounded-xl text-xs font-bold hover:bg-white/10 transition-all border border-border"
+            >
+              <X size={14} />
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="mb-6">
+          {/* Content Warning Overlay */}
+          {post.content_warning && !cwRevealed ? (
+            <div className="relative rounded-2xl overflow-hidden cursor-pointer" onClick={() => setCwRevealed(true)}>
+              <div className="blur-md pointer-events-none select-none">
+                {post.title && <h3 className="text-xl font-black text-foreground mb-3">{post.title}</h3>}
+                <p className="text-sm text-muted-foreground">{post.content.slice(0, 120)}...</p>
+              </div>
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-background/60 backdrop-blur-sm gap-2">
+                <AlertTriangle className="w-6 h-6 text-amber-500" />
+                <span className="text-xs font-black text-amber-500 uppercase tracking-widest">Content Warning</span>
+                <span className="text-[11px] text-muted-foreground font-medium">{post.content_warning}</span>
+                <span className="text-[10px] text-primary font-bold mt-1">Click to reveal</span>
+              </div>
+            </div>
+          ) : (
+            <>
+              {post.title && (
+                <Link href={`/post/${post.id}`}>
+                  <h3 className="text-xl md:text-2xl font-black text-foreground mb-3 leading-[1.2] tracking-tight group-hover/post:text-primary transition-colors">
+                    {post.title}
+                  </h3>
+                </Link>
+              )}
+              <Link href={`/post/${post.id}`} className="block mb-2">
+                <div className="text-sm md:text-base font-medium leading-relaxed text-muted-foreground/90">
+                  {post.content.length > 250
+                    ? <>{renderContent(post.content.slice(0, 250))}<span>...</span>
+                      <span className="text-primary font-black text-[10px] uppercase tracking-widest mt-3 block hover:underline">Read full insight</span>
+                    </>
+                    : renderContent(post.content)
+                  }
+                </div>
+              </Link>
+              {post.edited_at && (
+                <span className="text-[10px] text-muted-foreground/50 italic">edited</span>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {post.poll && <PollBlock poll={post.poll} postId={post.id} />}
+
+      {post.image_url && (
+        <div className="mb-6 rounded-3xl overflow-hidden border border-border/50 group/img relative cursor-pointer">
+          <div className="absolute inset-0 bg-primary/20 opacity-0 group-hover/img:opacity-100 transition-opacity z-10 flex items-center justify-center">
+            <Eye className="text-white scale-150" />
+          </div>
+          <Image
+            src={getAbsUrl(post.image_url)}
+            alt="Post attachment"
+            width={0}
+            height={0}
+            sizes="(max-width: 768px) 100vw, 800px"
+            style={{ width: '100%', height: 'auto', maxHeight: '500px', objectFit: 'contain' }}
+            className="transition-transform duration-700 group-hover/img:scale-105"
+          />
+        </div>
+      )}
+
+      {/* 4. ACTIONS BAR */}
+      <div className="flex flex-wrap items-center justify-between gap-4 pt-6 mt-2 border-t border-border/50 overflow-visible">
+        <div className="flex items-center gap-2 relative">
+          {/* UPVOTE -> REACTIONS */}
+          <PostReactions
+            postId={post.id}
+            currentReaction={currentReaction}
+            reactionCount={reactionCount}
+            onReact={handleReact}
+            disabled={isReacting}
+          />
+
+          {/* DOWNVOTE */}
+          <button
+            onClick={handleDownvote}
+            disabled={isDownvoting}
+            className={`flex items-center gap-2.5 px-5 py-2.5 rounded-2xl text-xs font-bold transition-all active:scale-95 ${hasDownvoted ? "bg-destructive/10 text-destructive border border-destructive/20" : "bg-white/5 text-muted-foreground/50 hover:bg-destructive/10 hover:text-destructive"} ${isDownvoting ? "opacity-50" : ""}`}
+          >
+            <ThumbsDown size={16} className={hasDownvoted ? "fill-destructive" : ""} />
+            {downvoteCount > 0 && <span className="ml-1 opacity-80 pl-1 border-l border-current/20 font-black">{downvoteCount}</span>}
+          </button>
+
+          {/* COMMENT */}
+          <button
+            onClick={() => setShowComments(!showComments)}
+            className="flex items-center gap-2.5 px-5 py-2.5 rounded-2xl bg-white/5 text-muted-foreground hover:bg-primary/10 hover:text-primary text-xs font-bold transition-all group/btn"
+          >
+            <MessageSquare size={16} className="group-hover/btn:scale-110 transition-transform" />
+            <span className="hidden sm:inline">Discuss</span>
+            {(comments.length + (post.comments?.length || 0)) > 0 && <span className="ml-1 opacity-80 pl-1 border-l border-current/20 font-black">{comments.length + (post.comments?.length || 0)}</span>}
+          </button>
+
+          {/* SHARE */}
+          <button
+            onClick={handleShare}
+            className="flex items-center gap-2.5 px-5 py-2.5 rounded-2xl bg-white/5 text-muted-foreground hover:bg-white/10 hover:text-foreground text-xs font-bold transition-all"
+          >
+            <Share2 size={16} />
+          </button>
+
+          {/* BOOKMARK */}
+          <button
+            onClick={handleBookmark}
+            className={`flex items-center gap-2.5 px-5 py-2.5 rounded-2xl transition-all ${isBookmarked ? "bg-amber-500 text-white shadow-xl shadow-amber-500/20" : "bg-white/5 text-muted-foreground hover:bg-amber-500/10 hover:text-amber-600"}`}
+          >
+            <Bookmark size={16} className={isBookmarked ? "fill-white" : ""} />
+          </button>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {/* Insights — own posts only */}
+          {currentUser?.uid === post.user_id && (
+            <button
+              onClick={handleInsights}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/5 text-muted-foreground hover:bg-violet-500/10 hover:text-violet-400 transition-all text-xs font-bold"
+              title="View post insights"
+            >
+              <BarChart2 size={14} />
+              <span className="hidden sm:inline">Insights</span>
+            </button>
+          )}
+
+          {/* AI Summarize */}
+          {/* Helped Me Button */}
+          <button
+            onClick={handleHelped}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl transition-all text-xs font-bold ${isHelped ? "bg-primary/20 text-primary" : "bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20 active:scale-95"}`}
+            title="This helped me"
+          >
+            <Sparkles size={14} className={isHelped ? "fill-primary" : ""} />
+            <span className="hidden sm:inline">{isHelped ? "Helped" : "Helped Me"}</span>
+            {helpedCount > 0 && <span>({helpedCount})</span>}
+          </button>
+
+          {post.content.length > 200 && (
+            <button
+              onClick={handleSummarize}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl transition-all text-xs font-bold ${showSummary ? "bg-primary/20 text-primary" : "bg-white/5 text-muted-foreground hover:bg-primary/10 hover:text-primary"}`}
+              title="AI Summarize"
+            >
+              {summarizing ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+              <span className="hidden sm:inline">{showSummary && summary ? "Hide Summary" : "AI Summarize"}</span>
+            </button>
+          )}
+
+          <div className="flex items-center gap-1.5 p-2 bg-white/5 rounded-xl text-[10px] font-black text-muted-foreground/30 uppercase tracking-[0.2em]">
+            <Eye size={14} className="text-muted-foreground/50" />
+            <span>{viewCount} Views</span>
+          </div>
+        </div>
+      </div>
+
+      {/* INSIGHTS PANEL */}
+      {showInsights && currentUser?.uid === post.user_id && (
+        <div className="mt-4 p-4 rounded-2xl bg-white/3 border border-white/8 animate-in slide-in-from-top-2 relative">
+          <button onClick={() => setShowInsights(false)} className="absolute top-3 right-3 text-muted-foreground hover:text-foreground transition-colors">
+            <X size={14} />
+          </button>
+          <h4 className="text-xs font-black text-foreground uppercase tracking-widest mb-3 flex items-center gap-1.5">
+            <BarChart2 size={13} className="text-violet-400" /> Post Insights
+          </h4>
+          {insightsLoading ? (
+            <div className="flex gap-2 items-center text-muted-foreground text-xs"><div className="w-3 h-3 border border-primary/30 border-t-primary rounded-full animate-spin" /> Loading...</div>
+          ) : insights ? (
+            <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
+              {[
+                { label: "Views", val: insights.views, color: "text-blue-400" },
+                { label: "Reactions", val: insights.reactions, color: "text-primary" },
+                { label: "Comments", val: insights.comments, color: "text-emerald-400" },
+                { label: "Bookmarks", val: insights.bookmarks, color: "text-amber-400" },
+                { label: "Downvotes", val: insights.downvotes, color: "text-red-400" },
+              ].map(({ label, val, color }) => (
+                <div key={label} className="flex flex-col items-center gap-0.5 p-2 bg-white/3 rounded-xl">
+                  <span className={`text-lg font-black ${color}`}>{val}</span>
+                  <span className="text-[10px] text-muted-foreground uppercase tracking-wider">{label}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      )}
+
+      {/* SUMMARY PANEL */}
+      {showSummary && (
+        <motion.div
+          initial={{ opacity: 0, height: 0 }}
+          animate={{ opacity: 1, height: "auto" }}
+          className="mt-4 p-4 rounded-2xl bg-primary/5 border border-primary/10 relative overflow-hidden"
+        >
+          <div className="absolute top-0 left-0 w-1 h-full bg-primary/30" />
+          <h4 className="text-[10px] font-black text-primary uppercase tracking-widest mb-2 flex items-center gap-1.5">
+            <Sparkles size={12} /> AI Summary
+          </h4>
+          {summarizing ? (
+            <div className="flex gap-2 items-center text-muted-foreground text-xs italic">
+              <Loader2 size={12} className="animate-spin" /> Distilling insights...
+            </div>
+          ) : (
+            <p className="text-xs text-foreground/90 leading-relaxed italic">
+              "{summary}"
+            </p>
+          )}
+        </motion.div>
+      )}
+      {/* HELPED FEEDBACK INPUT */}
+      <AnimatePresence>
+        {showHelpedInput && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            className="mt-4 p-4 rounded-2xl bg-emerald-500/5 border border-emerald-500/10 relative overflow-hidden"
+          >
+            <h4 className="text-[10px] font-black text-emerald-500 uppercase tracking-widest mb-3">How did this help you?</h4>
+            
+            <div className="flex flex-wrap gap-2 mb-4">
+              {[
+                "Gained so much experience",
+                "Helped me in getting a job",
+                "Learned a lesson",
+                "Inspired my journey",
+                "Technical clarity"
+              ].map(chip => (
+                <button
+                  key={chip}
+                  onClick={() => setHelpedText(prev => prev ? `${prev} ${chip}` : chip)}
+                  className="px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-full text-[10px] font-bold text-emerald-600 hover:bg-emerald-500 hover:text-white transition-all"
+                >
+                  + {chip}
+                </button>
+              ))}
+            </div>
+            <textarea
+              value={helpedText}
+              onChange={(e) => setHelpedText(e.target.value)}
+              placeholder="e.g. This helped me in getting my first job and I gained so much experience through this..."
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2 text-xs text-white focus:outline-none focus:border-emerald-500/50 min-h-[60px] resize-none mb-3"
+            />
+            <div className="flex justify-end gap-2">
+              <button 
+                onClick={() => setShowHelpedInput(false)}
+                className="px-3 py-1.5 rounded-lg text-[10px] font-bold text-muted-foreground hover:bg-white/5"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={submitHelpedFeedback}
+                disabled={!helpedText.trim() || isSubmittingHelped}
+                className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-[10px] font-bold hover:bg-emerald-600 disabled:opacity-50 transition-all"
+              >
+                {isSubmittingHelped ? "Sharing..." : "Share Experience"}
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* COMMENTS SECTION */}
+      {showComments && (
+        <div className="bg-black/20 -mx-5 -mb-5 mt-5 p-5 border-t border-white/5 animate-in slide-in-from-top-2">
+
+          {/* Global Restriction Banner for Comments */}
+          {(() => {
+            const isEmailVerified = currentUser?.email_verified === true;
+            const isRestrictedByEmail = requireVerifiedEmail && !isEmailVerified;
+            const isRestrictedOverall = readOnlyMode || isRestrictedByEmail;
+            const isAdmin = currentUser?.role === 'admin' || currentUser?.username === 'admin';
+            const canComment = isAdmin || !isRestrictedOverall;
+
+            return (
+              <>
+                {!canComment && (
+                  <div className="mb-6 p-4 rounded-2xl bg-destructive/10 border border-destructive/20 flex items-center gap-3">
+                    <ShieldAlert size={18} className="text-destructive shrink-0" />
+                    <p className="text-xs font-medium text-muted-foreground">
+                      {readOnlyMode
+                        ? "Commenting is disabled in Read-Only mode."
+                        : "Verify your email to join the conversation."
+                      }
+                    </p>
+                    {isRestrictedByEmail && !readOnlyMode && (
+                      <Link href="/profile" className="ml-auto text-[10px] font-black uppercase tracking-widest text-primary hover:underline">
+                        Verify
+                      </Link>
+                    )}
+                  </div>
+                )}
+
+                {/* Main Input */}
+                <div className={`flex gap-3 mb-6 transition-all duration-300 ${!canComment ? "opacity-30 pointer-events-none grayscale" : ""}`}>
+                  <img
+                    src={getAbsUrl(currentUser?.photoURL) || '/assets/default_avatar.png'}
+                    width={32}
+                    height={32}
+                    className="rounded-full ring-2 ring-white/10 object-cover"
+                    onError={(e) => { if (!e.currentTarget.src.includes('default_avatar')) e.currentTarget.src = '/assets/default_avatar.png'; }}
+                    alt="Your avatar"
+                  />
+                  <div className="flex-1 relative">
+                    <input
+                      value={commentText}
+                      onChange={(e) => setCommentText(e.target.value)}
+                      placeholder="Share your thoughts..."
+                      className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-primary/50 focus:bg-white/10 transition-all placeholder:text-white/20"
+                      onKeyDown={(e) => e.key === "Enter" && handleComment()}
+                    />
+                    <button
+                      onClick={() => handleComment()}
+                      disabled={!commentText.trim()}
+                      className="absolute right-2 top-1.5 p-1 text-primary hover:text-primary/80 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      <CornerDownRight size={18} />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  {commentTree.length === 0 ? (
+                    <div className="text-center text-white/20 py-8 text-sm italic">No comments yet. Be the first!</div>
+                  ) : (
+                    commentTree.map((c) => (
+                      <CommentItem
+                        key={c.id}
+                        comment={c}
+                        currentUser={currentUser}
+                        canComment={canComment}
+                        onReply={(parentId, content) => handleComment(parentId, content)}
+                      />
+                    ))
+                  )}
+                </div>
+              </>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* MODALS */}
+      {currentUser && (
+        <ReportModal
+          isOpen={reportModalConfig.isOpen}
+          onClose={() => setReportModalConfig({ ...reportModalConfig, isOpen: false })}
+          targetId={reportModalConfig.targetId}
+          targetType={reportModalConfig.targetType}
+          reporterId={currentUser.uid}
+        />
+      )}
+    </div>
+  );
+}
+
+export default memo(PostItem);
+

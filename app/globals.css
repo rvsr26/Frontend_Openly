@@ -1,0 +1,553 @@
+@import "tailwindcss";
+
+@plugin "tailwindcss-animate";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  /* Simplified Color Palette - Light Mode */
+  --background: 0 0% 100%;
+  --foreground: 222 47% 11%;
+
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 11%;
+
+  --primary: 221 83% 53%;
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 220 13% 95%;
+  --secondary-foreground: 222 47% 11%;
+
+  --muted: 220 13% 95%;
+  --muted-foreground: 220 9% 46%;
+
+  --accent: 220 13% 95%;
+  --accent-foreground: 222 47% 11%;
+
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 0 0% 100%;
+
+  --border: 220 13% 91%;
+  --input: 220 13% 91%;
+  --ring: 221 83% 53%;
+  --radius: 0.75rem;
+}
+
+.dark {
+  /* Clean Dark Mode */
+  --background: 222 47% 11%;
+  --foreground: 210 40% 98%;
+
+  --card: 217 33% 17%;
+  --card-foreground: 210 40% 98%;
+
+  --popover: 217 33% 17%;
+  --popover-foreground: 210 40% 98%;
+
+  --primary: 217 91% 60%;
+  --primary-foreground: 222 47% 11%;
+
+  --secondary: 217 33% 17%;
+  --secondary-foreground: 210 40% 98%;
+
+  --muted: 217 33% 17%;
+  --muted-foreground: 215 20% 65%;
+
+  --accent: 217 33% 17%;
+  --accent-foreground: 210 40% 98%;
+
+  --destructive: 0 63% 31%;
+  --destructive-foreground: 210 40% 98%;
+
+  --border: 217 33% 24%;
+  --input: 217 33% 24%;
+  --ring: 217 91% 60%;
+}
+
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+
+  --animate-accordion-down: accordion-down 0.2s ease-out;
+  --animate-accordion-up: accordion-up 0.2s ease-out;
+
+  @keyframes accordion-down {
+    from {
+      height: 0;
+    }
+
+    to {
+      height: var(--radix-accordion-content-height);
+    }
+  }
+
+  @keyframes accordion-up {
+    from {
+      height: var(--radix-accordion-content-height);
+    }
+
+    to {
+      height: 0;
+    }
+  }
+}
+
+/* ========== GLOBAL STYLES ========== */
+
+* {
+  @apply border-border;
+}
+
+body {
+  @apply bg-background text-foreground antialiased selection:bg-primary/20 selection:text-primary-foreground;
+  font-family: var(--font-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  overflow-x: hidden;
+}
+
+/* ========== CUSTOM UTILITIES ========== */
+
+@layer utilities {
+
+  /* Card System */
+  .card-simple {
+    @apply bg-card border border-border rounded-2xl shadow-sm transition-all duration-200;
+  }
+
+  .card-simple:hover {
+    @apply shadow-md border-border/80;
+  }
+
+  .card-interactive {
+    @apply bg-card border border-border rounded-2xl shadow-sm transition-all duration-200 cursor-pointer;
+  }
+
+  .card-interactive:hover {
+    @apply shadow-lg border-primary/20 -translate-y-0.5;
+  }
+
+  .card-elevated {
+    @apply bg-card border border-border rounded-2xl shadow-md;
+  }
+
+  /* Spacing System */
+  .section-padding {
+    @apply px-4 sm:px-6 lg:px-8 py-6 sm:py-8 lg:py-12;
+  }
+
+  .content-gap {
+    @apply space-y-4 sm:space-y-6;
+  }
+
+  .content-gap-sm {
+    @apply space-y-2 sm:space-y-3;
+  }
+
+  .content-gap-lg {
+    @apply space-y-6 sm:space-y-8;
+  }
+
+  /* Typography Scale */
+  .heading-primary {
+    @apply text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight text-foreground;
+  }
+
+  .heading-secondary {
+    @apply text-2xl sm:text-3xl font-bold tracking-tight text-foreground;
+  }
+
+  .heading-tertiary {
+    @apply text-xl sm:text-2xl font-semibold tracking-tight text-foreground;
+  }
+
+  .text-body {
+    @apply text-base text-foreground leading-relaxed;
+  }
+
+  .text-body-sm {
+    @apply text-sm text-muted-foreground leading-relaxed;
+  }
+
+  .text-meta {
+    @apply text-xs text-muted-foreground;
+  }
+
+  /* Button Styles */
+  .btn-primary {
+    @apply px-4 sm:px-6 py-2.5 sm:py-3 bg-primary hover:bg-primary/90 text-primary-foreground font-semibold rounded-xl shadow-sm hover:shadow-md transition-all duration-200 active:scale-[0.98];
+  }
+
+  .btn-secondary {
+    @apply px-4 sm:px-6 py-2.5 sm:py-3 bg-secondary hover:bg-secondary/80 text-secondary-foreground font-semibold rounded-xl transition-all duration-200 active:scale-[0.98];
+  }
+
+  .btn-ghost {
+    @apply px-4 py-2.5 text-foreground hover:bg-muted/50 font-medium rounded-xl transition-all duration-200;
+  }
+
+  .btn-icon {
+    @apply p-2.5 text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-xl transition-all duration-200;
+  }
+
+  /* Input Styles */
+  .input-field {
+    @apply w-full bg-background border border-input rounded-xl px-4 py-2.5 text-foreground placeholder:text-muted-foreground outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all duration-200;
+  }
+
+  .input-field:disabled {
+    @apply opacity-50 cursor-not-allowed;
+  }
+}
+
+/* ========== SCROLLBAR ========== */
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-muted-foreground/20 rounded-full hover:bg-muted-foreground/30 transition-colors;
+}
+
+/* Hide scrollbar visually but keep scrollable */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  /* IE / Edge */
+  scrollbar-width: none;
+  /* Firefox */
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+  /* Chrome / Safari / Opera */
+}
+
+/* ========== MORE UTILITIES ========== */
+
+@layer utilities {
+  .text-gradient {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-primary to-primary/60;
+  }
+
+  .divider {
+    @apply border-t border-border;
+  }
+
+  .divider-vertical {
+    @apply border-l border-border;
+  }
+
+  .container-responsive {
+    @apply max-w-7xl mx-auto px-4 sm:px-6 lg:px-8;
+  }
+
+  .grid-responsive {
+    @apply grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6;
+  }
+
+  .focus-ring {
+    @apply outline-none focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:ring-offset-2 focus-visible:ring-offset-background;
+  }
+
+  .skeleton {
+    @apply animate-pulse bg-muted/50 rounded;
+  }
+
+  .spinner {
+    @apply animate-spin rounded-full border-2 border-muted border-t-primary;
+  }
+}
+
+/* ========== ANIMATIONS ========== */
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@layer utilities {
+  .animate-fade-in {
+    animation: fade-in 0.3s ease-out;
+  }
+
+  .animate-slide-up {
+    animation: slide-up 0.3s ease-out;
+  }
+}
+
+/* ========== MARKDOWN CONTENT ========== */
+
+.markdown-content h1 {
+  @apply text-3xl font-bold tracking-tight mb-4 text-foreground;
+}
+
+.markdown-content h2 {
+  @apply text-2xl font-bold tracking-tight mb-3 text-foreground;
+}
+
+.markdown-content h3 {
+  @apply text-xl font-semibold tracking-tight mb-2 text-foreground;
+}
+
+.markdown-content p {
+  @apply text-base text-foreground leading-relaxed mb-4;
+}
+
+.markdown-content code {
+  @apply bg-muted px-1.5 py-0.5 rounded text-sm font-mono text-primary font-medium;
+}
+
+.markdown-content pre {
+  @apply bg-muted/50 border border-border rounded-xl my-4 overflow-x-auto p-4;
+}
+
+.markdown-content pre code {
+  @apply bg-transparent p-0;
+}
+
+.markdown-content ul,
+.markdown-content ol {
+  @apply ml-6 mb-4 space-y-2;
+}
+
+.markdown-content li {
+  @apply text-base text-foreground leading-relaxed;
+}
+
+.markdown-content a {
+  @apply text-primary hover:underline;
+}
+
+.markdown-content blockquote {
+  @apply border-l-4 border-primary/30 pl-4 italic text-muted-foreground my-4;
+}
+
+/* Note: All custom utilities are now defined in @layer utilities blocks above */
+/* ============================================
+   VIEW MODES
+   ============================================ */
+
+/* Compact View */
+[data-view-mode="compact"] .card-simple {
+  padding: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+/* Spacious View */
+[data-view-mode="spacious"] .card-simple {
+  padding: 2rem;
+  margin-bottom: 1.5rem;
+}
+
+/* Grid View */
+[data-view-mode="grid"] .feed-container {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 1rem;
+}
+
+/* ============================================
+   ACCESSIBILITY FEATURES
+   ============================================ */
+
+/* Font Sizes */
+[data-font-size="small"] {
+  font-size: 14px;
+}
+
+[data-font-size="medium"] {
+  font-size: 16px;
+}
+
+[data-font-size="large"] {
+  font-size: 18px;
+}
+
+[data-font-size="x-large"] {
+  font-size: 20px;
+}
+
+/* High Contrast */
+.high-contrast {
+  --background: 0 0% 0%;
+  --foreground: 0 0% 100%;
+  --border: 0 0% 30%;
+}
+
+/* Reduce Motion */
+.reduce-motion *,
+.reduce-motion *::before,
+.reduce-motion *::after {
+  animation-duration: 0.01ms !important;
+  transition-duration: 0.01ms !important;
+}
+
+/* Screen Reader */
+[data-screen-reader="true"] button {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* ============================================
+   MOBILE OPTIMIZATIONS
+   ============================================ */
+
+/* Safe Area for iOS notch/home indicator */
+.safe-area-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.safe-area-top {
+  padding-top: env(safe-area-inset-top);
+}
+
+/* Bottom Navigation Spacing */
+@media (max-width: 768px) {
+  body {
+    padding-bottom: calc(4rem + env(safe-area-inset-bottom));
+  }
+}
+
+/* Touch-friendly tap targets */
+@media (max-width: 768px) {
+
+  button,
+  a {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+/* Swipe gesture feedback */
+.swipe-action-hint {
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: pan-y;
+}
+
+/* Pull to refresh container */
+.pull-to-refresh-container {
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Premium Components */
+.premium-card {
+  @apply relative bg-card/60 backdrop-blur-xl border border-border/50 rounded-2xl shadow-xl overflow-hidden transition-all duration-300;
+  background-image: radial-gradient(circle at top left, hsl(var(--primary)/0.03), transparent);
+}
+
+.premium-card::before {
+  content: '';
+  @apply absolute inset-0 -z-10 bg-gradient-to-br from-primary/5 via-transparent to-primary/5 opacity-0 transition-opacity duration-300;
+}
+
+.premium-card:hover::before {
+  @apply opacity-100;
+}
+
+.premium-card:hover {
+  @apply border-primary/20 shadow-primary/5;
+}
+
+/* ========== SIMPLEMDE OVERRIDES ========== */
+
+.editor-toolbar {
+  @apply !bg-muted/30 !border-border !rounded-t-xl !border-0 !border-b !py-3 !px-4;
+  backdrop-filter: blur(8px);
+}
+
+.editor-toolbar button {
+  @apply !text-muted-foreground !transition-all !duration-200 !rounded-lg !mx-0.5;
+}
+
+.editor-toolbar button:hover,
+.editor-toolbar button.active {
+  @apply !bg-primary/10 !text-primary !border-transparent;
+}
+
+.editor-toolbar i.separator {
+  @apply !border-l !border-border !mx-2;
+}
+
+.CodeMirror {
+  @apply !bg-transparent !text-foreground !border-0 !font-sans !text-[15px] !p-4 !min-h-[140px] !transition-all !duration-300;
+  border-bottom-left-radius: 0.75rem !important;
+  border-bottom-right-radius: 0.75rem !important;
+}
+
+.CodeMirror-focused {
+  @apply !ring-0;
+}
+
+.CodeMirror-placeholder {
+  @apply !text-muted-foreground/60 !italic;
+}
+
+.CodeMirror-cursor {
+  @apply !border-primary;
+}
+
+.editor-preview-side {
+  @apply !bg-card !text-foreground !border-border;
+}
+
+.editor-statusbar {
+  @apply !text-muted-foreground !py-2 !px-4;
+}
+
+.editor-container {
+  @apply transition-all duration-300 rounded-xl border border-border/50 bg-background/50 overflow-hidden;
+}
+
+.editor-container:focus-within {
+  @apply border-primary/30 bg-background/80 shadow-lg shadow-primary/5;
+}
